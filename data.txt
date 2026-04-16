@@ -1,0 +1,1 @@
+{'amar amran-my': {'store_name': 'Amar Amran Boutique', 'url': 'https://www.zalora.com.my/store/amar-amran-boutique'}, 'amar amran-sg': {'store_name': 'Amar Amran Boutique', 'url': 'https://www.zalora.sg/store/amar-amran-boutique'}}
