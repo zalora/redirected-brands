@@ -1,14 +1,16 @@
 import asyncio
 from playwright.async_api import async_playwright
+from playwright.async_api import TimeoutError
 from bs4 import BeautifulSoup
 from urllib.parse import quote
 from utils import log
+from collections import Counter
 
 all_brands_result = []
+res = {}
 all_redirect_stores = {}
 gift_promotion_dismissed = False
 gift_promotion_lock = None
-
 
 
 async def fetch_brand_from_url(page, url):
@@ -124,7 +126,7 @@ async def find_redirect_store(browser_context, brand_list, url, num_workers=3):
     # Create semaphore to limit concurrent requests
     semaphore = asyncio.Semaphore(num_workers)
     
-    # Split brands into smaller batches to reduce memory (even smaller batches)
+    # Split brands into smaller batches to reduce memory
     batch_size = max(1, len(brand_list) // (num_workers * 3))  # Smaller batches
     
     async def process_batch(brands):
@@ -157,8 +159,35 @@ async def find_redirect_store(browser_context, brand_list, url, num_workers=3):
 
 
 async def find_store(page, brand, country):
+    target = brand.strip().lower()
+
+    current_url = getattr(page, 'url', '')
+    if "brandIds" not in current_url:
+        try:
+            await page.wait_for_selector("//*[@data-test-value='brandIds[]']", timeout=10000)
+            await page.locator("//*[@data-test-value='brandIds[]']").click()
+            await page.locator("//*[@data-test-id='searchInput']").fill(brand.strip())
+
+            options = page.locator("//*[@data-test-id='selectOption']")
+            count = await options.count()
+
+            for i in range(count):
+                option = options.nth(i)
+                value = await option.get_attribute("data-test-value")
+                if value and value.strip().lower() == target:
+                    label = option.locator("xpath=..")
+                    await label.click()
+                    break
+                if i == count - 1:
+                    log(f"{brand.title()} - {country.upper()} has no matching brand option")
+                    return
+            await page.locator("//*[@data-test-id='modalApplyButton']").click()
+        except TimeoutError:
+            print('TimeoutError occurred')
+            pass
+
     await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-    # await asyncio.sleep(2)
+
     try:
         await page.wait_for_selector("//*[@data-test-value='seller_id']", timeout=10000)
         view_store_button = page.locator("//*[@data-test-value='seller_id']")
@@ -166,37 +195,40 @@ async def find_store(page, brand, country):
 
         await asyncio.sleep(1)  # wait for the store page to load after clicking the button
 
-        # await page.wait_for_selector("//*[@data-test-id='selectOption']", timeout=3000)
         store_count = await page.locator("//*[@data-test-id='selectOption']").count()
         stores = await page.locator("//*[@data-test-id='selectOption']").evaluate_all(
             "elements => elements.map(el => el.getAttribute('data-test-value'))"
         )
-        # print(stores)
-        # print(f"Stores - {brand.title()} - {country.upper()}: {store_count}")
-        keywords = {'ZALORA', 'Sasa', 'Strawberry'}
-        has_common = not keywords.isdisjoint(stores)
-        if has_common:
-            return
 
         if store_count > 1:
-            # log(f"{brand.title()} - {country.upper()} has multiple stores")
+            res.setdefault(brand.title(), []).extend(stores)
             return
         elif store_count == 0:
-            log(f"{brand.title()} - {country.upper()} has no store")     
+            log(f"{brand.title()} - {country.upper()} has no store")  
+            return  
         else:
             log(f"{brand.title()} - {country.upper()} has ONLY 1 store")
-    except Exception:
-        log(f"{brand.title()} - {country.upper()} has no store or error occurred")
+            res.setdefault(brand.title(), []).extend(stores)
+            return
 
+    except Exception as e:
+        log(f"{brand.title()} - {country.upper()} has no store or error occurred: {e}")
 
+async def remove_duplicate(data):
+    all_values = [v.lower().strip() for values in data.values() for v in values]
+    counter = Counter(all_values)
+
+    result = {
+        brand: stores
+        for brand, stores in data.items()
+        if all(counter[store.lower().strip()] == 1 for store in stores)
+    }
+
+    return result
 
 async def extract_brands_data(urls):
     """Main function to extract brands from multiple URLs and find single-store brands"""
     global gift_promotion_lock, gift_promotion_dismissed, all_brands_result, all_redirect_stores
-    
-    # Clear previous data to free memory
-    all_brands_result.clear()
-    all_redirect_stores.clear()
     
     # Initialize the lock and reset dismissed state for this execution
     gift_promotion_lock = asyncio.Lock()
@@ -226,9 +258,6 @@ async def extract_brands_data(urls):
         
         brand_list_unique = list(brand_set)
         del brand_set  # Free memory immediately
-        
-        # Clear intermediate data to free memory
-        all_brands_result.clear()
 
         # Process redirect stores using shared browser context
         log(f"Finding redirect stores for {len(brand_list_unique)} brands")
@@ -239,8 +268,12 @@ async def extract_brands_data(urls):
         
         await browser.close()
 
-    log(f"{len(all_redirect_stores)} redirect stores have been processed.")  
-    return all_redirect_stores
+    log(f"{len(res)} redirect stores have been processed.")
+
+    final_result = await remove_duplicate(res)
+
+    print(f"Final result: {len(final_result)}")
+    return final_result
 
 async def click_if_exists(page, selector):
     """Click an element if it exists"""
