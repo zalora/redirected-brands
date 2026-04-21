@@ -45,8 +45,13 @@ def get_all_brands(webpage_content):
         elements = webpage_content.find_all('a', class_=lambda x: x and 'text-base' in x and 'hover:underline' in x)
         
         # Extract text directly in generator to save memory
-        brands = [el.get_text(strip=True) for el in elements if el.get_text(strip=True)]
+        brands = {
+            el.get_text(strip=True): el.get("href")
+            for el in elements
+            if el.get_text(strip=True)
+        }
         
+                
         log(f"Found {len(brands)} brands")
         return brands
     except Exception as e:
@@ -54,7 +59,8 @@ def get_all_brands(webpage_content):
         return []      
 
 
-async def process_brand(page, base_url, country, brand):
+async def process_brand(page, base_url, country, brand, brand_url):
+
     """Process a single brand search task"""
     global gift_promotion_dismissed, gift_promotion_lock
     
@@ -85,13 +91,9 @@ async def process_brand(page, base_url, country, brand):
                 h1_tag = store_header.find('h1')
                 if h1_tag:
                     store_name = h1_tag.get_text(strip=True)
-            
-            # Cleanup BeautifulSoup object
-            webpage_content.decompose()
-            del webpage_content, content
 
             all_redirect_stores[f"{brand}-{country}"] = {
-                "store_name": store_name,
+                "store_name": [store_name],
                 "keyword": brand_keyword,
                 "url": current_url
             }
@@ -100,14 +102,14 @@ async def process_brand(page, base_url, country, brand):
                 if not gift_promotion_dismissed:
                     await click_if_exists(page, "//*[@data-test-id='giftPromotionOnboardingGotIt']")
                     gift_promotion_dismissed = True
-            await find_store(page, brand, country)
+            await find_store(page, brand, country, brand_url)
         
     except Exception as e:
         current_url = getattr(page, 'url', '')
         if response and response.status == 404 and "/store" in current_url:
             log(f"{brand.title()} - {country.upper()} found in 1 store - URL returned 404")
             all_redirect_stores[f"{brand}-{country}"] = {
-                "store_name": "",
+                "store_name": [""],
                 "keyword": brand_keyword,
                 "url": current_url
             }
@@ -115,7 +117,7 @@ async def process_brand(page, base_url, country, brand):
             log(f"Error searching for {brand.title()}: {e}")
 
 
-async def find_redirect_store(browser_context, brand_list, url, num_workers=3):
+async def find_redirect_store(browser_context, brand_list, url, num_workers=10):
     """Process brands using shared browser context"""
     base_url = url.replace("/brands", "")
     country = base_url[-2:]
@@ -126,23 +128,23 @@ async def find_redirect_store(browser_context, brand_list, url, num_workers=3):
     # Create semaphore to limit concurrent requests
     semaphore = asyncio.Semaphore(num_workers)
     
-    # Split brands into smaller batches to reduce memory
-    batch_size = max(1, len(brand_list) // (num_workers * 3))  # Smaller batches
+    # Optimize batch size for higher worker count
+    batch_size = max(2, len(brand_list) // (num_workers * 3))  # Larger batches for efficiency
     
     async def process_batch(brands):
         """Process a batch of brands using a single page"""
         async with semaphore:
             page = await browser_context.new_page()
             try:
-                for brand in brands:
-                    await process_brand(page, base_url, country, brand)
+                for brand, brand_url in brands:
+                    await process_brand(page, base_url, country, brand, brand_url)
             finally:
                 await page.close()
     
     # Process batches in smaller groups to reduce memory pressure
     tasks = []
     for i in range(0, len(brand_list), batch_size):
-        batch = brand_list[i:i + batch_size]
+        batch = list(brand_list.items())[i:i + batch_size]
         if batch:
             tasks.append(asyncio.create_task(process_batch(batch)))
             
@@ -158,40 +160,19 @@ async def find_redirect_store(browser_context, brand_list, url, num_workers=3):
     log(f"Completed processing {len(brand_list)} brands for {country.upper()}")
 
 
-async def find_store(page, brand, country):
-    target = brand.strip().lower()
+async def find_store(page, brand, country, brand_url):
+    # target = brand.strip().lower()
 
     current_url = getattr(page, 'url', '')
     if "brandIds" not in current_url:
-        try:
-            await page.wait_for_selector("//*[@data-test-value='brandIds[]']", timeout=10000)
-            await page.locator("//*[@data-test-value='brandIds[]']").click()
-            await page.locator("//*[@data-test-id='searchInput']").fill(brand.strip())
+        await page.goto(brand_url)     
 
-            options = page.locator("//*[@data-test-id='selectOption']")
-            count = await options.count()
-
-            for i in range(count):
-                option = options.nth(i)
-                value = await option.get_attribute("data-test-value")
-                if value and value.strip().lower() == target:
-                    label = option.locator("xpath=..")
-                    await label.click()
-                    break
-                if i == count - 1:
-                    log(f"{brand.title()} - {country.upper()} has no matching brand option")
-                    return
-            await page.locator("//*[@data-test-id='modalApplyButton']").click()
-        except TimeoutError:
-            print('TimeoutError occurred')
-            pass
-
-    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+    await page.evaluate("window.scrollTo(0, 1000)")
 
     try:
         await page.wait_for_selector("//*[@data-test-value='seller_id']", timeout=10000)
         view_store_button = page.locator("//*[@data-test-value='seller_id']")
-        await view_store_button.click()
+        await view_store_button.click(timeout=5000)
 
         await asyncio.sleep(1)  # wait for the store page to load after clicking the button
 
@@ -200,28 +181,30 @@ async def find_store(page, brand, country):
             "elements => elements.map(el => el.getAttribute('data-test-value'))"
         )
 
-        if store_count > 1:
-            res.setdefault(brand.title(), []).extend(stores)
+        if store_count > 0:
+            log(f"{brand.title()} - {country.upper()} has ONLY in 1 store")
+            brand_keyword = brand.replace(".", "").replace("'", "")
+            all_redirect_stores[f"{brand}-{country}"] = {
+                "store_name": stores,
+                "keyword": brand_keyword,
+                "url": current_url
+            }
             return
-        elif store_count == 0:
-            log(f"{brand.title()} - {country.upper()} has no store")  
-            return  
         else:
-            log(f"{brand.title()} - {country.upper()} has ONLY 1 store")
-            res.setdefault(brand.title(), []).extend(stores)
-            return
+            # log(f"{brand.title()} - {country.upper()} has no store")  
+            return  
 
+    except TimeoutError:
+        log(f"{brand.title()} - {country.upper()} has no store (timeout)")
     except Exception as e:
         log(f"{brand.title()} - {country.upper()} has no store or error occurred: {e}")
 
 async def remove_duplicate(data):
-    all_values = [v.lower().strip() for values in data.values() for v in values]
-    counter = Counter(all_values)
+    store_count = Counter(s for v in data.values() for s in v["store_name"])
 
     result = {
-        brand: stores
-        for brand, stores in data.items()
-        if all(counter[store.lower().strip()] == 1 for store in stores)
+        k: v for k, v in data.items()
+        if all(store_count[s] == 1 for s in v["store_name"])
     }
 
     return result
@@ -249,30 +232,18 @@ async def extract_brands_data(urls):
                 await fetch_brand_from_url(page, url)
             finally:
                 await page.close()
-
-        # merge and deduplicate brand lists from all URLs using set (faster than dict.fromkeys)
-        brand_set = set()
-        for sublist in all_brands_result:
-            for item in sublist:
-                brand_set.add(item.lower())
-        
-        brand_list_unique = list(brand_set)
-        del brand_set  # Free memory immediately
-
-        # Process redirect stores using shared browser context
-        log(f"Finding redirect stores for {len(brand_list_unique)} brands")
         
         # Process each URL sequentially to reduce memory pressure  
-        for url in urls:
-            await find_redirect_store(context, brand_list_unique, url)
+        for country_url in urls:
+            await find_redirect_store(context, all_brands_result[0], country_url)
         
         await browser.close()
 
-    log(f"{len(res)} redirect stores have been processed.")
+    log(f"{len(all_redirect_stores)} redirect stores have been processed.")
 
-    final_result = await remove_duplicate(res)
+    final_result = await remove_duplicate(all_redirect_stores)
 
-    print(f"Final result: {len(final_result)}")
+    log(f"Final result: {len(final_result)}")
     return final_result
 
 async def click_if_exists(page, selector):
