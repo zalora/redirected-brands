@@ -2,10 +2,10 @@ from data_crawler import crawler_execute
 from data_exporter import exporter_run
 
 sites = [
-    "https://www.zalora.com.my/brands"
-    # "https://www.zalora.sg/brands", 
-    # "https://www.zalora.com.hk/brands",
-    # "https://www.zalora.co.id/brands"
+    "https://www.zalora.com.my/brands",
+    "https://www.zalora.sg/brands",
+    "https://www.zalora.com.hk/brands",
+    "https://www.zalora.co.id/brands"
 ]
 
 def main():

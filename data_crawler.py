@@ -5,11 +5,12 @@ from bs4 import BeautifulSoup
 from urllib.parse import quote
 from utils import log
 from collections import Counter
+from slugify import slugify
 
 all_brands_result = []
-res = {}
 all_redirect_stores = {}
-gift_promotion_dismissed = False
+final_result = {}
+gift_promotion_dismissed = None
 gift_promotion_lock = None
 
 
@@ -25,6 +26,7 @@ async def fetch_brand_from_url(page, url):
         content = await page.content()
         webpage_content = BeautifulSoup(content, 'html.parser')  # Built-in parser
         
+        all_brands_result.clear()  # Clear previous results
         brands = get_all_brands(webpage_content)
         all_brands_result.append(brands)
         
@@ -156,13 +158,14 @@ async def find_redirect_store(browser_context, brand_list, url, num_workers=10):
     # Process remaining tasks
     if tasks:
         await asyncio.gather(*tasks)
+
+    result = await remove_duplicate(all_redirect_stores)
+    final_result.update(result)
     
     log(f"Completed processing {len(brand_list)} brands for {country.upper()}")
 
 
 async def find_store(page, brand, country, brand_url):
-    # target = brand.strip().lower()
-
     current_url = getattr(page, 'url', '')
     if "brandIds" not in current_url:
         await page.goto(brand_url)     
@@ -170,9 +173,9 @@ async def find_store(page, brand, country, brand_url):
     await page.evaluate("window.scrollTo(0, 1000)")
 
     try:
-        await page.wait_for_selector("//*[@data-test-value='seller_id']", timeout=10000)
+        await page.wait_for_selector("//*[@data-test-value='seller_id']", timeout=3000)
         view_store_button = page.locator("//*[@data-test-value='seller_id']")
-        await view_store_button.click(timeout=5000)
+        await view_store_button.click(timeout=2000)
 
         await asyncio.sleep(1)  # wait for the store page to load after clicking the button
 
@@ -182,12 +185,12 @@ async def find_store(page, brand, country, brand_url):
         )
 
         if store_count > 0:
-            log(f"{brand.title()} - {country.upper()} has ONLY in 1 store")
+            log(f"{brand.title()} - {country.upper()} has store[s]")
             brand_keyword = brand.replace(".", "").replace("'", "")
             all_redirect_stores[f"{brand}-{country}"] = {
                 "store_name": stores,
                 "keyword": brand_keyword,
-                "url": current_url
+                "url": country_url.replace("/brands", f"/store/{slugify(brand.lower())}")
             }
             return
         else:
@@ -202,16 +205,24 @@ async def find_store(page, brand, country, brand_url):
 async def remove_duplicate(data):
     store_count = Counter(s for v in data.values() for s in v["store_name"])
 
-    result = {
+    # remove brands that have duplicated store names
+    unique_data = {
         k: v for k, v in data.items()
         if all(store_count[s] == 1 for s in v["store_name"])
+    }
+
+    # remove brands that have more than 1 store
+    result = {
+        k: v
+        for k, v in unique_data.items()
+        if len(v["store_name"]) == 1
     }
 
     return result
 
 async def extract_brands_data(urls):
     """Main function to extract brands from multiple URLs and find single-store brands"""
-    global gift_promotion_lock, gift_promotion_dismissed, all_brands_result, all_redirect_stores
+    global gift_promotion_lock, gift_promotion_dismissed, all_brands_result, all_redirect_stores, country_url
     
     # Initialize the lock and reset dismissed state for this execution
     gift_promotion_lock = asyncio.Lock()
@@ -227,6 +238,7 @@ async def extract_brands_data(urls):
 
         # crawl data for all URLs sequentially to reduce memory
         for url in urls:
+            country_url = url
             page = await context.new_page()
             try:
                 await fetch_brand_from_url(page, url)
@@ -234,14 +246,13 @@ async def extract_brands_data(urls):
                 await page.close()
         
         # Process each URL sequentially to reduce memory pressure  
-        for country_url in urls:
-            await find_redirect_store(context, all_brands_result[0], country_url)
+        for url in urls:
+            all_redirect_stores.clear()  # Clear memory after processing
+            await find_redirect_store(context, all_brands_result[0], url)
         
         await browser.close()
 
     log(f"{len(all_redirect_stores)} redirect stores have been processed.")
-
-    final_result = await remove_duplicate(all_redirect_stores)
 
     log(f"Final result: {len(final_result)}")
     return final_result
