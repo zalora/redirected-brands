@@ -52,7 +52,7 @@ def process_brand_data(data):
         brand_name = get_brand_name(raw_key)
         country = get_country(raw_key)
         keyword = entries["keyword"]
-        store_name = entries["store_name"] if entries["store_name"] else get_store_name(entries["url"])
+        store_name = entries["store_name"][0] if entries["store_name"][0] else get_store_name(entries["url"])
 
         unique_key = (brand_name, store_name)
 
