@@ -40,7 +40,7 @@ def read_data_file():
 
 def get_brand_name(name):
     """Extract brand name by removing country suffix"""
-    return name.rsplit("-", 1)[0].title()
+    return name.rsplit(" - ", 1)[0].title()
 
 
 def get_store_name(url):
@@ -63,7 +63,7 @@ def get_store_name(url):
 
 def get_country(raw_key):
     """Extract country code from raw key"""
-    suffix = raw_key.rsplit("-", 1)[-1].upper()
+    suffix = raw_key.rsplit(" - ", 1)[-1].upper()
     if suffix in countries:
         return suffix
     return None
@@ -77,7 +77,7 @@ def process_brand_data(data):
         brand_name = get_brand_name(raw_key)
         country = get_country(raw_key)
         keyword = entries["keyword"]
-        store_name = entries["store_name"][0] if entries["store_name"][0] else get_store_name(entries["url"])
+        store_name = entries["store_name"] if entries["store_name"] else get_store_name(entries["url"])
 
         unique_key = (brand_name, store_name)
 
@@ -95,8 +95,8 @@ def process_brand_data(data):
             result[unique_key] = row
 
         if country:
-            result[unique_key][country] = 1
-            result[unique_key][f"{country} link"] = entries["url"]
+            result[unique_key][country.upper()] = 1
+            result[unique_key][f"{country.upper()} link"] = entries["url"]
     
     return result
 
@@ -188,14 +188,14 @@ def export_to_google_sheets(df):
         log("Added data to Google Sheets (overwrite mode)")
 
     # Set basic filter on the data range
-    try:
-        worksheet.set_basic_filter('A1:N')
-        # column index starts from 1 in gspread, so column B is index 2
-        # 'asc' (ascending) is A-Z, 'des' (descending) is Z-A
-        worksheet.sort((2, 'asc'))
-    except Exception as e:
-        log(f"Error setting basic filter: {e}")
-        pass
+    # try:
+    #     worksheet.set_basic_filter('A2:N')
+    #     # column index starts from 1 in gspread, so column B is index 2
+    #     # 'asc' (ascending) is A-Z, 'des' (descending) is Z-A
+    #     worksheet.sort((2, 'asc'))
+    # except Exception as e:
+    #     log(f"Error setting basic filter: {e}")
+    #     pass
 
 
 # def export_to_excel(df):
@@ -220,6 +220,6 @@ def exporter_run(data):
     
     log("Data processing completed successfully!")
 
-# if __name__ == "__main__":
-#     data = read_data_file()
-#     exporter_run(data)    
+if __name__ == "__main__":
+    data = read_data_file()
+    exporter_run(data)    
