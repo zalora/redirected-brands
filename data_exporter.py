@@ -6,24 +6,8 @@ from utils import log
 import gspread
 from google.oauth2.service_account import Credentials
 from gspread_dataframe import set_with_dataframe
-from gspread_formatting import (
-    DataValidationRule, 
-    BooleanCondition, 
-    set_data_validation_for_cell_range, 
-    get_conditional_format_rules, 
-    CellFormat, 
-    Color, 
-    ConditionalFormatRule, 
-    BooleanRule, 
-    GridRange
-)
-# import gspread
-# from google.oauth2.service_account import Credentials
 
 TXT_FILE = "data.txt"
-EXCEL_FILE = "brand_store_output.xlsx"
-# GOOGLE_SHEET_NAME = "Your Google Sheet Name"
-# SERVICE_ACCOUNT_FILE = "service_account.json"
 
 countries = ["SG", "MY", "HK", "ID"]
 
@@ -58,7 +42,6 @@ def get_store_name(url):
     
     # if no patterns match, return empty string
     return ""
-
 
 
 def get_country(raw_key):
@@ -198,16 +181,8 @@ def export_to_google_sheets(df):
     #     pass
 
 
-# def export_to_excel(df):
-#     """Export dataframe to Excel file"""
-#     df.to_excel(EXCEL_FILE, index=False)
-#     log(f"Excel file created: {EXCEL_FILE}")
-
-
 def exporter_run(data):
     """Main function to orchestrate the data processing"""
-    # Read data
-    # data = read_data_file()
     
     # Process data 
     result = process_brand_data(data)
@@ -220,6 +195,6 @@ def exporter_run(data):
     
     log("Data processing completed successfully!")
 
-if __name__ == "__main__":
-    data = read_data_file()
-    exporter_run(data)    
+# if __name__ == "__main__":
+#     data = read_data_file()
+#     exporter_run(data)    

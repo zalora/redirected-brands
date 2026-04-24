@@ -100,13 +100,6 @@ def remove_duplicates(data: dict) -> dict:
     }
     return result
 
-sites = [
-    "https://www.zalora.com.my/brands",
-    "https://www.zalora.sg/brands",
-    "https://www.zalora.com.hk/brands",
-    "https://www.zalora.co.id/brands"
-]
-
 def process_site(site):
     """Process a single site: fetch brand IDs then fetch stores for each brand"""
     domain = urlparse(site).netloc.replace("www.", "")
@@ -146,7 +139,7 @@ def format_data(data):
             session = make_session()
             res = session.get(url, headers=API_HEADERS, timeout=30)
             res.raise_for_status()
-            time.sleep(0.2)
+            time.sleep(0.4)
 
             result = res.json()
             store_name = result.get("data", {}).get("SellerName")
@@ -165,26 +158,29 @@ def format_data(data):
         except Exception as e:
             log(f"Error fetching store details for {brand}: {e}")
             return
+        
+def finalize_data(data):
+    """Finalize data by removing duplicates and formatting for export"""
+    unique_stores = remove_duplicates(data)
+    log(f"Found {len(unique_stores)} unique stores after removing duplicates")
+
+    for brand, store_id in unique_stores.items():
+        print(f"Processing brand: {brand} with store ID: {store_id}")
+        format_data({brand: store_id})
+ 
+    log(f"Found {len(final_data)} stores after formatting")
+    return final_data        
 
 
-if __name__ == "__main__":
+def api_execute(sites):
     # Process all 4 sites in parallel
     with ThreadPoolExecutor(max_workers=4) as executor:
         futures = [executor.submit(process_site, site) for site in sites]
         for future in as_completed(futures):
             future.result()
 
-    unique_stores = remove_duplicates(final)
-    log(f"Found {len(unique_stores)} unique stores after removing duplicates")
+    return finalize_data(final)
 
-    # unique_stores = {'Starter - my': ['13381'], 'Electro Denim Lab - hk': ['4589'], 'Demure & Co - hk': ['4969'], 'QuirkyT - my': ['13131'], 'My Ballerine - my': ['11500'], 'ISAGO - id': ['12427'], 'Hellobare - id': ['10082'], 'POLO HAUS - sg': ['13730'], 'Wrangler - id': ['3444'], 'FUGUKU - id': ['12553'], 'TOYS KINGDOM - id': ['12534'], 'Triset - id': ['12408'], 'Our Second Nature - my': ['13519'], 'Eagle - id': ['11393'], 'Alain Delon - hk': ['3093'], 'Kiss & Tell - hk': ['3251']}
 
-    for brand, store_id in unique_stores.items():
-        # print({brand: store_id})
-        format_data({brand: store_id})
-
-    # print(final_data)    
-
-    with open("data.txt", "w", encoding="utf-8") as f:
-        f.write(str(final_data))
-    log("Saved to data.txt")
+# if __name__ == "__main__":
+#     api_execute() 
