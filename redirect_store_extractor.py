@@ -1,6 +1,7 @@
 from call_api import api_execute
 from data_crawler import crawler_execute
 from data_exporter import exporter_run
+import ast
 
 sites = [
     "https://www.zalora.com.my/brands",
