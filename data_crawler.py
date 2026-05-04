@@ -1,3 +1,4 @@
+import re
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -76,10 +77,13 @@ def process_brand(base_url, country, brand, result):
             if h1:
                 store_name = h1.get_text(strip=True)
 
+        keyword1 = brand.split(" - ")[0].lower()
+        keyword2 = re.sub(r'[^a-zA-Z0-9 ]', '', brand.split(" - ")[0])        
+
         with _lock:
             result[f"{brand} - {country}"] = {
                 "store_name": store_name,
-                "keyword": brand_keyword,
+                "keyword": [keyword1, keyword2],
                 "url": final_url,
             }
 
@@ -108,9 +112,14 @@ def extract_brands_data(urls):
     """Fetch brands from each URL then find single-store brands."""
     result = {}
 
-    for url in urls:
+    def process_site(url):
         brands = fetch_brand_from_url(url)
         find_redirect_stores(brands, url, result)
+
+    with ThreadPoolExecutor(max_workers=len(urls)) as executor:
+        futures = [executor.submit(process_site, url) for url in urls]
+        for future in as_completed(futures):
+            future.result()
 
     log(f"{len(result)} redirect stores have been processed.")
     return result

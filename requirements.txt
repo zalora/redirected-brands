@@ -1,2 +1,10 @@
-aiohttp
-beautifulsoup4
+python-dotenv>=1.0.0
+requests==2.32.4
+urllib3==2.5.0
+beautifulsoup4==4.12.3
+python-slugify==8.0.4
+pandas==2.3.3
+gspread==6.2.1
+gspread-dataframe==4.0.0
+gspread-formatting==1.2.1
+google-auth==2.29.0

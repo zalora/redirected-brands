@@ -12,18 +12,24 @@ import time
 from slugify import slugify
 
 
-def make_session():
-    session = requests.Session()
-    retry = Retry(
-        total=5,
-        backoff_factor=1,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["GET"],
-    )
-    adapter = HTTPAdapter(max_retries=retry)
-    session.mount("https://", adapter)
-    session.mount("http://", adapter)
-    return session
+_thread_local = threading.local()
+
+
+def get_session():
+    """Return a thread-local session with retry logic."""
+    if not hasattr(_thread_local, "session"):
+        session = requests.Session()
+        retry = Retry(
+            total=5,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET"],
+        )
+        adapter = HTTPAdapter(max_retries=retry)
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        _thread_local.session = session
+    return _thread_local.session
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
@@ -38,11 +44,12 @@ API_HEADERS = {
 final = {}
 final_lock = threading.Lock()
 final_data = {}
+final_data_lock = threading.Lock()
 
 
 def fetch_brand_id_from_page(url):
     """Fetch brands from a /brands page using requests + BeautifulSoup"""
-    session = make_session()
+    session = get_session()
     res = session.get(url, headers=HEADERS, timeout=30)
     res.raise_for_status()
 
@@ -60,7 +67,7 @@ def fetch_brand_id_from_page(url):
 def fetch_stores_from_api(brand_id, domain, country):
     """Fetch stores for a brand from the Zalora filter API"""
     try:
-        session = make_session()
+        session = get_session()
         url = f"https://api.{domain}/v1/dynproducts/datajet/filter?brandIds={brand_id}"
         res = session.get(url, headers=API_HEADERS, timeout=30)
         res.raise_for_status()
@@ -113,7 +120,7 @@ def process_site(site):
         for future in as_completed(futures):
             future.result()  # raise exceptions if any
 
-    log(f"Done processing {country}, total entries: {len(final)}")
+    log(f"Done processing API in {country.upper()}, total entries: {len(final)}")
 
 def get_domain(country):
     """Get domain name based on country code"""
@@ -136,7 +143,7 @@ def format_data(data):
         try:
             url = f"https://api.{domain}/v1/seller/{store_id}"
 
-            session = make_session()
+            session = get_session()
             res = session.get(url, headers=API_HEADERS, timeout=30)
             res.raise_for_status()
             time.sleep(0.4)
@@ -148,11 +155,15 @@ def format_data(data):
 
             store_url = f"https://www.{domain}/store/{store_slug}"
 
-            final_data[brand] = {
-                "store_name": store_name,
-                "keyword": brand.split(" - ")[0].replace(".", "").replace("'", ""),
-                "url": store_url
-            }
+            keyword1 = brand.split(" - ")[0].lower()
+            keyword2 = re.sub(r'[^a-zA-Z0-9 ]', '', brand.split(" - ")[0])
+
+            with final_data_lock:
+                final_data[brand] = {
+                    "store_name": store_name,
+                    "keyword": [keyword1, keyword2],
+                    "url": store_url
+                }
 
             return final_data
         except Exception as e:
@@ -164,10 +175,11 @@ def finalize_data(data):
     unique_stores = remove_duplicates(data)
     log(f"Found {len(unique_stores)} unique stores after removing duplicates")
 
-    for brand, store_id in unique_stores.items():
-        print(f"Processing brand: {brand} with store ID: {store_id}")
-        format_data({brand: store_id})
- 
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = [executor.submit(format_data, {brand: store_id}) for brand, store_id in unique_stores.items()]
+        for future in as_completed(futures):
+            future.result()
+
     log(f"Found {len(final_data)} stores after formatting")
     return final_data        
 
@@ -180,7 +192,3 @@ def api_execute(sites):
             future.result()
 
     return finalize_data(final)
-
-
-# if __name__ == "__main__":
-#     api_execute() 
