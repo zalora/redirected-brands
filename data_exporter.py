@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import pandas as pd
 from datetime import datetime
 from dotenv import load_dotenv
@@ -98,10 +99,14 @@ def create_dataframe(result):
 
 def export_to_google_sheets(df):
     """Export dataframe to Google Sheets - append new data if not already exists"""
-    path_to_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE")
+    service_account_value = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE")
 
     scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-    creds = Credentials.from_service_account_file(path_to_json, scopes=scope)
+    try:
+        service_account_info = json.loads(service_account_value)
+        creds = Credentials.from_service_account_info(service_account_info, scopes=scope)
+    except (json.JSONDecodeError, TypeError):
+        creds = Credentials.from_service_account_file(service_account_value, scopes=scope)
     client = gspread.authorize(creds)
 
     spreadsheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1xxwmxQ4dB9PwNwOxVnYSIKUOgDgyiGIuav1vhuT-SeE/edit?gid=1616643352#gid=1616643352")
