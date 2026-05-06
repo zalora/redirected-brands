@@ -1,150 +1,130 @@
-import asyncio
-import aiohttp
+import re
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from bs4 import BeautifulSoup
 from urllib.parse import quote
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 from utils import log
 
-all_brands_result = []
-all_redirect_stores = {}
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 SHOPQAAutomation/",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+}
+
+_thread_local = threading.local()
+_lock = threading.Lock()
 
 
+def get_session():
+    """Return a thread-local requests session with retry logic."""
+    if not hasattr(_thread_local, "session"):
+        session = requests.Session()
+        retry = Retry(
+            total=3,
+            backoff_factor=0.5,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET"],
+        )
+        adapter = HTTPAdapter(max_retries=retry)
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        _thread_local.session = session
+    return _thread_local.session
 
-async def fetch_brand_from_url(session, url):
-    """Fetch webpage content from a URL and extract all brands from it"""
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 SHOPQAAutomation/'
+
+def fetch_brand_from_url(url):
+    """Fetch a /brands page and return {brand_name: href} dict."""
+    log(f"Opening {url}")
+    session = get_session()
+    res = session.get(url, headers=HEADERS, timeout=30)
+    res.raise_for_status()
+
+    soup = BeautifulSoup(res.text, "html.parser")
+    elements = soup.find_all(
+        "a", class_=lambda x: x and "text-base" in x and "hover:underline" in x
+    )
+    brands = {
+        el.get_text(strip=True): el.get("href")
+        for el in elements
+        if el.get_text(strip=True)
     }
-    
+    log(f"Found {len(brands)} brands from {url}")
+    return brands
+
+
+def process_brand(base_url, country, brand, result):
+    """Search for a brand and record it if the search redirects to a single store."""
+    brand_keyword = brand.replace(".", "").replace("'", "")
+    search_url = f"{base_url}/search?q={quote(brand_keyword)}"
+
     try:
-        log(f"Opening {url}")
-        async with session.get(url, headers=headers, timeout=10) as response:
-            response.raise_for_status()
+        session = get_session()
+        res = session.get(search_url, headers=HEADERS, timeout=30, allow_redirects=True)
+        final_url = res.url
 
-            content = await response.text()
-            webpage_content = BeautifulSoup(content, 'html.parser')
-            
-            all_brands_result.append(get_all_brands(webpage_content))
-            
+        if "/store" not in final_url:
+            return
+
+        log(f"{brand.title()} - {country.upper()} found in 1 store")
+
+        soup = BeautifulSoup(res.text, "html.parser")
+        store_name = ""
+        store_header = soup.find(id="zis-store-header")
+        if store_header:
+            h1 = store_header.find("h1")
+            if h1:
+                store_name = h1.get_text(strip=True)
+
+        keyword1 = brand.split(" - ")[0].lower()
+        keyword2 = re.sub(r'[^a-zA-Z0-9 ]', '', brand.split(" - ")[0])        
+
+        with _lock:
+            result[f"{brand} - {country}"] = {
+                "store_name": store_name,
+                "keyword": [keyword1, keyword2],
+                "url": final_url,
+            }
+
     except Exception as e:
-        log(f"Error opening {url}: {e}")
-        all_brands_result.append([])
+        log(f"Error searching for {brand.title()}: {e}")
 
 
-
-def get_all_brands(webpage_content):
-    """Extract all brand names from the webpage content"""
-    brand_list = []
-
-    # Find brands elements
-    elements = webpage_content.find_all('a', class_=lambda x: x and 'text-base' in x and 'hover:underline' in x)
-
-    log(f"Found {len(elements)} brands")
-    
-    for i, el in enumerate(elements):
-        try:
-            text = el.get_text(strip=True)
-            if text:
-                brand_list.append(text)
-        except Exception as e:
-            log(f"Error processing element {i+1}: {e}")
-
-    return brand_list      
-
-
-
-async def find_redirect_store(session, brand_list, url):
-    """Check which brands redirect to their own store page (single store brands)"""
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 SHOPQAAutomation/'
-    }
-    
+def find_redirect_stores(brand_list, url, result, num_workers=10):
+    """Process all brands for a site URL using a thread pool."""
     base_url = url.replace("/brands", "")
-    country = base_url[-2:]
+    country = base_url.rstrip("/")[-2:]
 
-    
-    for brand in brand_list:
-        # Remove dots and apostrophes from brand name for better search results
-        brand_keyword = brand.replace(".", "").replace("'", "")
-        # URL encode the brand name
-        encoded_brand = quote(brand_keyword)
-        search_url = f"{base_url}/search?q={encoded_brand}"
-        
-        try:
-            async with session.get(search_url, headers=headers, timeout=10) as response:
-                response.raise_for_status()
-                
-                # Check if redirected to store page
-                if "/store" in str(response.url):    
-                    msg = f"{brand.title()} - {country.upper()} found in 1 store"
-                    log(msg)
+    if not brand_list:
+        return
 
-                    # Extract store name from the redirected page
-                    content = await response.text()
-                    webpage_content = BeautifulSoup(content, 'html.parser')
-                    store_name = webpage_content.find(id='zis-store-header').find('h1').get_text(strip=True)
-
-                    row = {
-                        "store_name": store_name,
-                        "keyword": brand_keyword,
-                        "url": str(response.url)
-                    }
-
-                    all_redirect_stores[brand + "-" + country] = row
-            
-        except Exception as e:
-            if "404" in str(e) and "/store" in str(response.url):
-                log(f"{brand.title()} - {country.upper()} found in 1 store - URL returned 404")
-
-                row = {
-                    "store_name": "",
-                    "keyword": brand_keyword,
-                    "url": str(response.url)
-                }
-
-                all_redirect_stores[brand + "-" + country] = row
-            else:
-                log(f"Error searching for {brand.title()}: {e}")    
-
-        except aiohttp.ClientError as e:
-            log(f"Other request error searching for {brand.title()}: {e}")
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        futures = [
+            executor.submit(process_brand, base_url, country, brand, result)
+            for brand in brand_list
+        ]
+        for future in as_completed(futures):
+            future.result()
 
 
-async def element_exists(webpage_content, selector):
-    """Check if a specific element exists on the webpage"""
-    try:
-        log(f"Checking for element: {selector}")
-        element = webpage_content.find(attrs={'data-test-id': selector})
-        if element:
-            log("Element found!")
-            return True
-        return False
-    except Exception as e:
-        log(f"Error finding element: {e}")
-        return False
-    
+def extract_brands_data(urls):
+    """Fetch brands from each URL then find single-store brands."""
+    result = {}
 
+    def process_site(url):
+        brands = fetch_brand_from_url(url)
+        find_redirect_stores(brands, url, result)
 
-async def extract_brands_data(urls):
-    """Main function to extract brands from multiple URLs and find single-store brands"""
-    async with aiohttp.ClientSession() as session:
-        # crawl data for all URLs
-        tasks = [fetch_brand_from_url(session, url) for url in urls]
-        await asyncio.gather(*tasks)
+    with ThreadPoolExecutor(max_workers=len(urls)) as executor:
+        futures = [executor.submit(process_site, url) for url in urls]
+        for future in as_completed(futures):
+            future.result()
 
-    # merge and deduplicate brand lists from all URLs
-    merged = [item.lower() for sublist in all_brands_result for item in sublist]  
-    brand_list_unique = list(dict.fromkeys(merged))
-
-    # identify global store redirects using a unique cross-country brand list
-    log (f"Finding {len(brand_list_unique)} redirect stores")
-    async with aiohttp.ClientSession() as session:
-        tasks = [find_redirect_store(session, brand_list_unique, url) for url in urls]
-        await asyncio.gather(*tasks)
-
-    log(f"{len(all_redirect_stores)} redirect stores have been processed.")  
-    return all_redirect_stores
+    log(f"{len(result)} redirect stores have been processed.")
+    return result
 
 
 def crawler_execute(urls):
-    """Execute the brand crawling process for the given URLs"""
-    return asyncio.run(extract_brands_data(urls))
+    """Entry point: execute the brand crawling process for the given URLs."""
+    return extract_brands_data(urls)

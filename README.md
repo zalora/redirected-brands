@@ -1,54 +1,44 @@
-# Simple Playwright Web Opener
+# Store Extractor
 
-Easy-to-use Python functions for opening web pages with Playwright.
+Automated tool to extract single-store brand data from Zalora across Malaysia, Singapore, Hong Kong, and Indonesia — and export the results to Google Sheets.
 
-## Quick Setup
+## How It Works
 
-1. Install Playwright:
+1. **`call_api.py`** — Fetches brand IDs from each Zalora `/brands` page via the Zalora filter API, identifies brands that belong to a single store, then resolves the store name and URL.
+2. **`data_crawler.py`** — Crawls Zalora search pages using `requests` + `BeautifulSoup`. Brands whose search results redirect to a single `/store` page are captured with their store name and URL.
+3. **`data_exporter.py`** — Merges the results and writes them to Google Sheets using a service account.
+4. **`redirect_store_extractor.py`** — Entry point that orchestrates all three steps.
+
+## Setup
+
+1. Install dependencies:
    ```bash
    pip install -r requirements.txt
-   playwright install
    ```
 
-2. Run the basic example:
+2. Place your Google service account JSON key in the project root and update the filename reference in `data_exporter.py` if needed.
+
+3. Run the extractor:
    ```bash
-   python web_opener.py
+   python redirect_store_extractor.py
    ```
 
-## Usage
+## Project Structure
 
-### Open a single website:
-```python
-from web_opener import open_web
-
-# Basic usage
-result = open_web("https://example.com")
-
-# With screenshot  
-result = open_web("https://github.com", screenshot=True)
-
-# In background (headless)
-result = open_web("https://python.org", headless=True)
+```
+redirect_store_extractor.py  # Entry point
+call_api.py                  # Brand/store resolution via Zalora API
+data_crawler.py              # Store discovery via search redirect crawling
+data_exporter.py             # Google Sheets export
+utils.py                     # Shared logging utility
+requirements.txt             # Python dependencies
 ```
 
-### Open multiple websites:
-```python
-from web_opener import open_multiple_webs
+## Supported Sites
 
-sites = ["https://github.com", "https://python.org"]
-results = open_multiple_webs(sites)
-```
-
-## Function Parameters
-
-- `url` (str): Website URL to open
-- `headless` (bool): Run in background (True) or show browser (False)  
-- `screenshot` (bool): Save screenshot of the page
-
-## Run Examples
-
-```bash
-python examples.py
-```
-
-This will demonstrate all the different ways to use the web opener functions.
+| Country | URL |
+|---------|-----|
+| Malaysia | https://www.zalora.com.my |
+| Singapore | https://www.zalora.sg |
+| Hong Kong | https://www.zalora.com.hk |
+| Indonesia | https://www.zalora.co.id |
