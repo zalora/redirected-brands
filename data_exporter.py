@@ -99,7 +99,7 @@ def create_dataframe(result):
 
 def export_to_google_sheets(df):
     """Export dataframe to Google Sheets - append new data if not already exists"""
-    service_account_value = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE")
+    service_account_value = os.getenv("GOOGLE_SERVICE_ACCOUNT")
 
     scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     try:
