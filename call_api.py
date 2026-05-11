@@ -48,7 +48,7 @@ final_data_lock = threading.Lock()
 
 
 def fetch_brand_id_from_page(url):
-    """Fetch brands from a /brands page using requests + BeautifulSoup"""
+    """Fetch brands from page using requests + BeautifulSoup"""
     session = get_session()
     res = session.get(url, headers=HEADERS, timeout=30)
     res.raise_for_status()
@@ -91,7 +91,7 @@ def fetch_stores_from_api(brand_id, domain, country):
         with final_lock:
             final[f"{brand} - {country}"] = stores
     except Exception as e:
-        log(f"Error fetching stores for brand {brand_id} in {country}: {e}")        
+        log(f"[API] Error fetching stores for brand {brand_id} in {country}: {e}")        
 
 def remove_duplicates(data: dict) -> dict:
     store_count = Counter(
@@ -103,7 +103,7 @@ def remove_duplicates(data: dict) -> dict:
     result = {
         brand: stores
         for brand, stores in data.items()
-        if all(store_count[s] == 1 for s in stores)
+        if stores and all(store_count[s] == 1 for s in stores)
     }
     return result
 
@@ -113,14 +113,14 @@ def process_site(site):
     country = domain.split(".")[-1]
 
     brand_ids = fetch_brand_id_from_page(site)
-    log(f"Found {len(brand_ids)} brands in {country}")
+    log(f"[API] Found {len(brand_ids)} brands in {country.upper()} from {site}")
 
     with ThreadPoolExecutor(max_workers=10) as brand_executor:
         futures = [brand_executor.submit(fetch_stores_from_api, brand_id, domain, country) for brand_id in brand_ids]
         for future in as_completed(futures):
-            future.result()  # raise exceptions if any
+            future.result()
 
-    log(f"Done processing API in {country.upper()}, total entries: {len(final)}")
+    log(f"[API] Done processing API in {country.upper()}")
 
 def get_domain(country):
     """Get domain name based on country code"""
@@ -167,25 +167,27 @@ def format_data(data):
 
             return final_data
         except Exception as e:
-            log(f"Error fetching store details for {brand}: {e}")
+            log(f"[API] Error fetching store details for {brand}: {e}")
             return
         
 def finalize_data(data):
     """Finalize data by removing duplicates and formatting for export"""
     unique_stores = remove_duplicates(data)
-    log(f"Found {len(unique_stores)} unique stores after removing duplicates")
+    log(f"[API] Found {len(unique_stores)} unique stores after removing duplicates")
 
+    log("[API] Starting to format data for export...")
     with ThreadPoolExecutor(max_workers=10) as executor:
         futures = [executor.submit(format_data, {brand: store_id}) for brand, store_id in unique_stores.items()]
         for future in as_completed(futures):
             future.result()
 
-    log(f"Found {len(final_data)} stores after formatting")
+    log(f"[API] Found {len(final_data)} stores after formatting")
     return final_data        
 
 
 def api_execute(sites):
     # Process all 4 sites in parallel
+    log("Starting API data extraction...")
     with ThreadPoolExecutor(max_workers=4) as executor:
         futures = [executor.submit(process_site, site) for site in sites]
         for future in as_completed(futures):

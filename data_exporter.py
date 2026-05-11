@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import time
 import pandas as pd
 from datetime import datetime
 from dotenv import load_dotenv
@@ -32,7 +33,7 @@ def get_store_name(url):
             result = match.group(1)
             return result.replace("-", " ").title()
     
-    # if no patterns match, return empty string
+    # If no patterns match, return empty string
     return ""
 
 
@@ -78,7 +79,7 @@ def process_brand_data(data):
 
 def create_dataframe(result):
     """Convert result dict to formatted dataframe"""
-    # convert result dict to dataframe
+    # Convert result dict to dataframe
     df = pd.DataFrame(result.values())
 
     # Add 'Status' column with default value "New Added"
@@ -98,18 +99,38 @@ def create_dataframe(result):
 
 
 def export_to_google_sheets(df):
-    """Export dataframe to Google Sheets - append new data if not already exists"""
+    """Export dataframe to Google Sheets - append new data if not already exists.
+
+    Requires the GOOGLE_SERVICE_ACCOUNT environment variable to be set to either:
+      - A JSON string (the full contents of a service account key file), or
+      - A file path pointing to a service account JSON key file.
+
+    Requires GOOGLE_SHEET_URL to be set to the full Google Sheets URL.
+    """
     service_account_value = os.getenv("GOOGLE_SERVICE_ACCOUNT")
+
+    if not service_account_value or not service_account_value.strip():
+        raise EnvironmentError(
+            "GOOGLE_SERVICE_ACCOUNT is not set or empty. "
+            "Set it to the service account JSON string or a path to the JSON key file."
+        )
+
+    sheet_url = os.getenv("GOOGLE_SHEET_URL")
+    if not sheet_url or not sheet_url.strip():
+        raise EnvironmentError(
+            "GOOGLE_SHEET_URL is not set or empty. "
+            "Set it to the full Google Sheets URL."
+        )
 
     scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     try:
         service_account_info = json.loads(service_account_value)
         creds = Credentials.from_service_account_info(service_account_info, scopes=scope)
-    except (json.JSONDecodeError, TypeError):
+    except json.JSONDecodeError:
         creds = Credentials.from_service_account_file(service_account_value, scopes=scope)
     client = gspread.authorize(creds)
 
-    spreadsheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1xxwmxQ4dB9PwNwOxVnYSIKUOgDgyiGIuav1vhuT-SeE/edit?gid=1616643352#gid=1616643352")
+    spreadsheet = client.open_by_url(sheet_url)
     worksheet = spreadsheet.get_worksheet(0)
 
     # Get existing data from sheet
