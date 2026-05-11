@@ -26,4 +26,5 @@ jobs:
       - name: Run extractor
         env:
           GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+          GOOGLE_SHEET_URL: ${{ secrets.GOOGLE_SHEET_URL }}
         run: python3 redirect_store_extractor.py

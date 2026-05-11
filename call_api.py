@@ -103,7 +103,7 @@ def remove_duplicates(data: dict) -> dict:
     result = {
         brand: stores
         for brand, stores in data.items()
-        if all(store_count[s] == 1 for s in stores)
+        if stores and all(store_count[s] == 1 for s in stores)
     }
     return result
 
