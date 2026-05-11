@@ -10,9 +10,6 @@ import gspread
 from google.oauth2.service_account import Credentials
 from gspread_dataframe import set_with_dataframe
 
-os.environ['TZ'] = 'Etc/GMT-6'
-time.tzset()
-
 load_dotenv()
 
 countries = ["SG", "MY", "HK", "ID"]
