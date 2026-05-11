@@ -2,8 +2,8 @@ name: Zalora Redirect Store Extractor
 
 on:
   schedule:
-    # Every Monday at 8:00 AM GMT+6 (= 02:00 UTC)
-    - cron: '0 2 * * 1'
+    # Every 1st day of the month at 8:00 AM GMT+6 (= 02:00 UTC)
+    - cron: '0 2 1 * *'
   workflow_dispatch: # allow manual trigger from GitHub UI
 
 jobs:
