@@ -22,8 +22,8 @@ ENV/
 .env.*
 
 # Credentials & secrets
-*.json
-!requirements*.json
+client-secret*.json
+*service-account*.json
 
 # IDE
 .vscode/
@@ -38,6 +38,3 @@ Thumbs.db
 # Logs
 *.log
 logs/
-
-# Jupyter
-.ipynb_checkpoints/

@@ -38,7 +38,6 @@ def get_session():
 
 def fetch_brand_from_url(url):
     """Fetch a /brands page and return {brand_name: href} dict."""
-    log(f"Opening {url}")
     session = get_session()
     res = session.get(url, headers=HEADERS, timeout=30)
     res.raise_for_status()
@@ -52,7 +51,7 @@ def fetch_brand_from_url(url):
         for el in elements
         if el.get_text(strip=True)
     }
-    log(f"Found {len(brands)} brands from {url}")
+    log(f"[CRAWLER] Found {len(brands)} brands from {url}")
     return brands
 
 
@@ -69,7 +68,7 @@ def process_brand(base_url, country, brand, result):
         if "/store" not in final_url:
             return
 
-        log(f"{brand.title()} - {country.upper()} found in 1 store")
+        log(f"[CRAWLER] [{country.upper()}] {brand.title()} redirects to {final_url}")
 
         soup = BeautifulSoup(res.text, "html.parser")
         store_name = ""
@@ -90,7 +89,7 @@ def process_brand(base_url, country, brand, result):
             }
 
     except Exception as e:
-        log(f"Error searching for {brand.title()}: {e}")
+        log(f"[CRAWLER] Error searching for {brand.title()}: {e}")
 
 
 def find_redirect_stores(brand_list, url, result, num_workers=10):
@@ -123,7 +122,7 @@ def extract_brands_data(urls):
         for future in as_completed(futures):
             future.result()
 
-    log(f"{len(result)} redirect stores have been processed.")
+    log(f"[CRAWLER] {len(result)} redirect stores have been processed.")
     return result
 
 

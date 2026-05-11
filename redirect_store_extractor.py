@@ -1,6 +1,7 @@
 from call_api import api_execute
 from data_crawler import crawler_execute
 from data_exporter import exporter_run
+from utils import log
 
 sites = [
     "https://www.zalora.com.my/brands",
@@ -18,7 +19,7 @@ def main():
     result = {**fetched_data, **crawled_data}
 
     exporter_run(result)
-    print("Data extraction and export completed successfully.")
+    log("Data extraction and export completed successfully.")
     
 
 if __name__ == "__main__":

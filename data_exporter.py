@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import time
 import pandas as pd
 from datetime import datetime
 from dotenv import load_dotenv
@@ -8,6 +9,9 @@ from utils import log
 import gspread
 from google.oauth2.service_account import Credentials
 from gspread_dataframe import set_with_dataframe
+
+os.environ['TZ'] = 'Etc/GMT-6'
+time.tzset()
 
 load_dotenv()
 
@@ -32,7 +36,7 @@ def get_store_name(url):
             result = match.group(1)
             return result.replace("-", " ").title()
     
-    # if no patterns match, return empty string
+    # If no patterns match, return empty string
     return ""
 
 
@@ -78,7 +82,7 @@ def process_brand_data(data):
 
 def create_dataframe(result):
     """Convert result dict to formatted dataframe"""
-    # convert result dict to dataframe
+    # Convert result dict to dataframe
     df = pd.DataFrame(result.values())
 
     # Add 'Status' column with default value "New Added"

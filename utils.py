@@ -1,4 +1,9 @@
 import datetime
+import os
+import time
+
+os.environ['TZ'] = 'Etc/GMT-6'
+time.tzset()
 
 def log(msg):
     """Print message with timestamp"""
