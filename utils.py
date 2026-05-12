@@ -9,7 +9,7 @@ def init_timezone():
      global _TIMEZONE_INITIALIZED
      if _TIMEZONE_INITIALIZED:
          return
-     os.environ['TZ'] = 'Etc/GMT-6'
+     os.environ['TZ'] = 'Etc/GMT-8' # Set timezone to Singapore time (UTC+8)
      if hasattr(time, 'tzset'):
          time.tzset()
      _TIMEZONE_INITIALIZED = True
