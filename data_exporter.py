@@ -1,7 +1,6 @@
 import os
 import re
 import json
-import time
 import pandas as pd
 from datetime import datetime
 from dotenv import load_dotenv
@@ -133,35 +132,72 @@ def export_to_google_sheets(df):
     spreadsheet = client.open_by_url(sheet_url)
     worksheet = spreadsheet.get_worksheet(0)
 
+    # Map each country to its (value column letter, url column letter) in the sheet
+    # Columns: B=Brand name, C=Keyword, D=Store name, E=SG, F=MY, G=HK, H=ID,
+    #          I=Store Redirection Status, J=Date Time Added, K=SG url, L=MY url, M=HK url, N=ID url
+    country_col_map = {
+        'SG': ('E', 'K'),
+        'MY': ('F', 'L'),
+        'HK': ('G', 'M'),
+        'ID': ('H', 'N'),
+    }
+
     # Get existing data from sheet
     try:
         existing_data = worksheet.get_all_records()
         if existing_data:
             existing_df = pd.DataFrame(existing_data)
             log(f"Found {len(existing_df)} existing records in sheet")
-            
-            # Create a set of existing (Brand name, Store name) combinations for fast lookup
-            existing_combinations = set()
-            for _, row in existing_df.iterrows():
-                existing_combinations.add((str(row['Brand name']).rstrip(), str(row['Store name']).rstrip()))
-    
-            
-            # Filter new data to only include records not already in sheet
+
+            # Build lookup: {(Brand name, Store name): (sheet_row_number, row_data)}
+            existing_lookup = {}
+            for i, (_, row) in enumerate(existing_df.iterrows()):
+                key = (str(row['Brand name']).rstrip(), str(row['Store name']).rstrip())
+                sheet_row = i + 2  # +2: row 1 is header, data starts at row 2
+                existing_lookup[key] = (sheet_row, row)
+
             new_records = []
+            batch_updates = []
+
             for _, row in df.iterrows():
-                if (str(row['Brand name']).rstrip(), str(row['Store name']).rstrip()) not in existing_combinations:
+                key = (str(row['Brand name']).rstrip(), str(row['Store name']).rstrip())
+                if key not in existing_lookup:
                     new_records.append(row)
-            
+                else:
+                    # Row already exists — update any country column that was 0 but is now 1
+                    sheet_row, existing_row = existing_lookup[key]
+                    for country in countries:
+                        new_val = row.get(country, 0)
+                        try:
+                            existing_val = int(existing_row.get(country, 0))
+                        except (ValueError, TypeError):
+                            existing_val = 0
+                        if new_val == 1 and existing_val == 0:
+                            country_col, url_col = country_col_map[country]
+                            url_val = row.get(f'{country} url', '')
+                            batch_updates.append({
+                                'range': f'{country_col}{sheet_row}',
+                                'values': [[1]]
+                            })
+                            batch_updates.append({
+                                'range': f'{url_col}{sheet_row}',
+                                'values': [[url_val]]
+                            })
+
+            if batch_updates:
+                worksheet.batch_update(batch_updates)
+                log(f"Updated {len(batch_updates) // 2} existing records with new country/URL data")
+
             if new_records:
                 new_df = pd.DataFrame(new_records)
-                
+
                 # Append new data below existing data (No column handled by SEQUENCE formula)
                 last_row = len(existing_df) + 2  # +2 because of header
                 set_with_dataframe(worksheet, new_df, row=last_row, col=2, include_index=False, include_column_header=False)  # Start from column B
-                
+
                 # Update SEQUENCE formula to include all rows
                 worksheet.update_acell('A2', '=SEQUENCE(COUNTA(B2:B))')
-                
+
                 log(f"Appended {len(new_df)} new records to Google Sheets")
             else:
                 log("No new records to add - all data already exists in sheet")

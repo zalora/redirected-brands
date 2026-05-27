@@ -94,16 +94,20 @@ def fetch_stores_from_api(brand_id, domain, country):
         log(f"[API] Error fetching stores for brand {brand_id} in {country}: {e}")        
 
 def remove_duplicates(data: dict) -> dict:
-    store_count = Counter(
-        store
-        for stores in data.values()
+    # Count (store_id, country) pairs — same store in different countries is NOT a duplicate
+    store_country_count = Counter(
+        (store, brand.rsplit(" - ", 1)[-1])
+        for brand, stores in data.items()
         for store in stores
     )
 
     result = {
         brand: stores
         for brand, stores in data.items()
-        if stores and all(store_count[s] == 1 for s in stores)
+        if stores and all(
+            store_country_count[(store, brand.rsplit(" - ", 1)[-1])] == 1
+            for store in stores
+        )
     }
     return result
 
@@ -141,28 +145,58 @@ def format_data(data):
         store_id = store_ids[0]
 
         try:
-            url = f"https://api.{domain}/v1/seller/{store_id}"
-
+            seller_info_url = f"https://api.{domain}/v1/dynseller/{store_id}/datajet/section/home"
             session = get_session()
-            res = session.get(url, headers=API_HEADERS, timeout=30)
-            res.raise_for_status()
+            seller_info_res = session.get(seller_info_url, headers=API_HEADERS, timeout=30)
+            seller_info_res.raise_for_status()
             time.sleep(0.4)
+            seller_info_url_result = seller_info_res.json()
 
-            result = res.json()
-            store_name = result.get("data", {}).get("SellerName")
+            final_store_name = next(
+                (
+                    s["Collection"]["ProductList"]["Products"][0]["FulfillmentInformation"]["SellerName"]
+                    for s in seller_info_url_result["data"]["Subsections"]
+                    if s["Collection"]
+                ),
+                None
 
-            store_slug = slugify(store_name.lower())
+            )
 
-            store_url = f"https://www.{domain}/store/{store_slug}"
+            final_store_slug = next(
+                (
+                    s["Collection"]["ProductList"]["Products"][0]["FulfillmentInformation"]["SellerUrlKey"]
+                    for s in seller_info_url_result["data"]["Subsections"]
+                    if s["Collection"]
+                ),
+                None
+
+            )
+
+            # Fallback to seller API only when missing name or slug from seller info endpoint
+            if final_store_name is None or final_store_slug is None:
+                seller_name_url = f"https://api.{domain}/v1/seller/{store_id}"
+                seller_name_res = session.get(seller_name_url, headers=API_HEADERS, timeout=30)
+                seller_name_res.raise_for_status()
+                time.sleep(0.4)
+                seller_name_result = seller_name_res.json()
+
+                fallback_name = seller_name_result.get("data", {}).get("SellerName")
+                if final_store_name is None:
+                    final_store_name = fallback_name
+                if final_store_slug is None and fallback_name:
+                    final_store_slug = slugify(fallback_name.lower())
+
+            final_store_url = f"https://www.{domain}/store/{final_store_slug}"
+                            
 
             keyword1 = brand.split(" - ")[0].lower()
             keyword2 = re.sub(r'[^a-zA-Z0-9 ]', '', brand.split(" - ")[0])
 
             with final_data_lock:
                 final_data[brand] = {
-                    "store_name": store_name,
+                    "store_name": final_store_name,
                     "keyword": [keyword1, keyword2],
-                    "url": store_url
+                    "url": final_store_url
                 }
 
             return final_data
