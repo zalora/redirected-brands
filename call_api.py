@@ -207,6 +207,8 @@ def format_data(data):
                 if final_store_slug is None and fallback_name:
                     final_store_slug = slugify(fallback_name.lower())
 
+            if not final_store_name or not final_store_slug:
+                raise ValueError(f"Missing seller name/slug for store_id={store_id}")
             final_store_url = f"https://www.{domain}/store/{final_store_slug}"
                             
 
