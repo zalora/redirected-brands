@@ -79,7 +79,8 @@ def fetch_stores_from_api(brand_id, domain, country):
         brand = ""
         for item in filters:
             if item.get("Id") == "seller_id":
-                for option in item.get("Options", []):
+                options = item.get("Options", [])
+                for option in options:
                     stores.append(option.get("Value"))
             if item.get("Id") == "brandIds[]":
                 for option in item.get("Options", []):
@@ -90,24 +91,44 @@ def fetch_stores_from_api(brand_id, domain, country):
 
         with final_lock:
             final[f"{brand} - {country}"] = stores
+
     except Exception as e:
         log(f"[API] Error fetching stores for brand {brand_id} in {country}: {e}")        
 
 def remove_duplicates(data: dict) -> dict:
-    # Count (store_id, country) pairs — same store in different countries is NOT a duplicate
+    def normalize_store_id(store_id):
+        return str(store_id).strip()
+
+    def normalize_country(brand_key):
+        return brand_key.rsplit(" - ", 1)[-1].strip().upper()
+
+    # Count normalized (store_id, country) pairs.
     store_country_count = Counter(
-        (store, brand.rsplit(" - ", 1)[-1])
+        (normalize_store_id(store), normalize_country(brand))
         for brand, stores in data.items()
         for store in stores
     )
+
+    duplicated_pairs = {
+        pair
+        for pair, count in store_country_count.items()
+        if count > 1
+    }
 
     result = {
         brand: stores
         for brand, stores in data.items()
         if stores and all(
-            store_country_count[(store, brand.rsplit(" - ", 1)[-1])] == 1
+            (normalize_store_id(store), normalize_country(brand)) not in duplicated_pairs
             for store in stores
         )
+    }
+
+    # After duplicate removal, drop brands sold by 2+ stores
+    result = {
+        brand: stores
+        for brand, stores in result.items()
+        if len(stores) < 2
     }
     return result
 

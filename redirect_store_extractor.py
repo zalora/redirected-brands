@@ -16,7 +16,8 @@ def main():
 
     crawled_data = crawler_execute(sites)
 
-    result = {**fetched_data, **crawled_data}
+    # Merge results, giving priority to crawler data in case of overlaps
+    result = {**crawled_data, **fetched_data}
 
     exporter_run(result)
     log("Data extraction and export completed successfully.")
