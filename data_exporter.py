@@ -141,6 +141,15 @@ def export_to_google_sheets(df):
         'HK': ('G', 'M'),
         'ID': ('H', 'N'),
     }
+    fixed_col_map = {
+        'Brand name': 'B',
+        'Keyword': 'C',
+        'Store Redirection Status': 'I',
+        'Date Time Added': 'J',
+    }
+
+    def is_missing(value):
+        return pd.isna(value) or str(value).strip() == ""
 
     # Get existing data from sheet
     try:
@@ -149,13 +158,16 @@ def export_to_google_sheets(df):
             existing_df = pd.DataFrame(existing_data)
             log(f"Found {len(existing_df)} existing records in sheet")
 
-            # Build lookup by store name only: {Store name: (sheet_row_number, row_data)}
+            # Build lookup by store name only: {Store name: {'sheet_row': row_number, 'row': row_data_dict}}
             existing_lookup = {}
             for i, (_, row) in enumerate(existing_df.iterrows()):
                 key = str(row['Store name']).rstrip()
                 sheet_row = i + 2  # +2: row 1 is header, data starts at row 2
                 if key and key not in existing_lookup:
-                    existing_lookup[key] = (sheet_row, row)
+                    existing_lookup[key] = {
+                        'sheet_row': sheet_row,
+                        'row': row.to_dict(),
+                    }
 
             new_records = []
             batch_updates = []
@@ -170,33 +182,87 @@ def export_to_google_sheets(df):
                     new_records.append(row)
                     seen_store_names.add(key)
                 else:
-                    # Row already exists — update any country column that was 0 but is now 1
-                    sheet_row, existing_row = existing_lookup.get(key, (None, None))
-                    if sheet_row is None or existing_row is None:
+                    # Row already exists — fill missing fields and merge country/url updates.
+                    entry = existing_lookup.get(key)
+                    if not entry:
                         continue
+
+                    sheet_row = entry['sheet_row']
+                    existing_row = entry['row']
+                    any_country_upgraded = False
+
+                    # Fill fixed fields if they are missing in sheet.
+                    for field in ['Brand name', 'Keyword', 'Store Redirection Status']:
+                        existing_val = existing_row.get(field, "")
+                        new_val = row.get(field, "")
+                        if is_missing(existing_val) and not is_missing(new_val):
+                            col = fixed_col_map[field]
+                            batch_updates.append({
+                                'range': f'{col}{sheet_row}',
+                                'values': [[new_val]]
+                            })
+                            existing_row[field] = new_val
+
                     for country in countries:
                         new_val = row.get(country, 0)
-                        try:
-                            existing_val = int(existing_row.get(country, 0))
-                        except (ValueError, TypeError):
+                        raw_existing_val = existing_row.get(country, "")
+                        country_col, url_col = country_col_map[country]
+
+                        # Normalize empty country marks in sheet to 0.
+                        if is_missing(raw_existing_val):
+                            batch_updates.append({
+                                'range': f'{country_col}{sheet_row}',
+                                'values': [[0]]
+                            })
                             existing_val = 0
+                            existing_row[country] = 0
+                        else:
+                            try:
+                                existing_val = int(raw_existing_val)
+                            except (ValueError, TypeError):
+                                existing_val = 0
+
+                        new_url_val = row.get(f'{country} url', '')
+                        existing_url_val = existing_row.get(f'{country} url', '')
+
                         if new_val == 1 and existing_val == 0:
-                            country_col, url_col = country_col_map[country]
-                            url_val = row.get(f'{country} url', '')
+                            any_country_upgraded = True
                             batch_updates.append({
                                 'range': f'{country_col}{sheet_row}',
                                 'values': [[1]]
                             })
+                            if not is_missing(new_url_val):
+                                batch_updates.append({
+                                    'range': f'{url_col}{sheet_row}',
+                                    'values': [[new_url_val]]
+                                })
+                                existing_row[f'{country} url'] = new_url_val
+                            existing_row[country] = 1
+                        elif new_val == 1 and is_missing(existing_url_val) and not is_missing(new_url_val):
+                            # Keep mark=1 and fill URL if it is missing.
+                            _, url_col = country_col_map[country]
                             batch_updates.append({
                                 'range': f'{url_col}{sheet_row}',
-                                'values': [[url_val]]
+                                'values': [[new_url_val]]
                             })
+                            existing_row[f'{country} url'] = new_url_val
+
+                    # Date Time Added rules:
+                    # 1) Override with current time if any country changes 0 -> 1.
+                    # 2) If missing, fill it as current time.
+                    current_datetime = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+                    if any_country_upgraded or is_missing(existing_row.get('Date Time Added', '')):
+                        batch_updates.append({
+                            'range': f"{fixed_col_map['Date Time Added']}{sheet_row}",
+                            'values': [[current_datetime]]
+                        })
+                        existing_row['Date Time Added'] = current_datetime
 
             new_record_brand_names = [str(r.get('Brand name', '')) for r in new_records]
             log(f"New record Brand name(s): {new_record_brand_names}")
             if batch_updates:
                 worksheet.batch_update(batch_updates)
-                log(f"Updated {len(batch_updates) // 2} existing records with new country/URL data")
+                log(f"Updated {len(batch_updates)} cell(s) in existing records")
 
             if new_records:
                 new_df = pd.DataFrame(new_records)

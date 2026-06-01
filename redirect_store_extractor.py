@@ -14,12 +14,12 @@ sites = [
 def main():
     fetched_data = api_execute(sites)
 
-    crawled_data = crawler_execute(sites)
+    # crawled_data = crawler_execute(sites)
 
     # Merge results, giving priority to crawler data in case of overlaps
-    result = {**crawled_data, **fetched_data}
+    # result = {**crawled_data, **fetched_data}
 
-    exporter_run(result)
+    exporter_run(fetched_data)
     log("Data extraction and export completed successfully.")
     
 
