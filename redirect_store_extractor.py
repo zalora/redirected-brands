@@ -14,11 +14,14 @@ sites = [
 def main():
     fetched_data = api_execute(sites)
 
-    crawled_data = crawler_execute(sites)
+    # crawled_data = crawler_execute(sites)
 
-    result = {**fetched_data, **crawled_data}
+    # Merge results, giving priority to crawler data in case of overlaps
+    # result = {**crawled_data, **fetched_data}
 
-    exporter_run(result)
+    # Using the API is the preferred approach for now, as it offers more complete data coverage
+    # Crawler cannot reliably identify the associated brand or store
+    exporter_run(fetched_data)
     log("Data extraction and export completed successfully.")
     
 

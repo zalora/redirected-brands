@@ -75,6 +75,9 @@ def process_brand(base_url, country, brand, result):
             h1 = store_header.find("h1")
             if h1:
                 store_name = h1.get_text(strip=True)
+        else:
+            # other case where store name can't be found will fallback to API execution
+            return        
 
         keyword1 = brand.split(" - ")[0].lower()
         keyword2 = re.sub(r'[^a-zA-Z0-9 ]', '', brand.split(" - ")[0])        
