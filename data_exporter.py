@@ -16,6 +16,8 @@ countries = ["SG", "MY", "HK", "ID"]
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 MAX_GOOGLE_API_RETRIES = 5
 BASE_RETRY_DELAY_SECONDS = 2
+BATCH_UPDATE_CHUNK_SIZE = 200
+LOG_PREVIEW_LIMIT = 10
 
 
 def get_brand_name(name):
@@ -141,13 +143,40 @@ def run_google_api_with_retry(action_name, action):
 
 def apply_batch_updates(worksheet, updates):
     """Apply updates in chunks to reduce API pressure and payload size."""
-    chunk_size = 200
-    for start in range(0, len(updates), chunk_size):
-        chunk = updates[start:start + chunk_size]
+    for start in range(0, len(updates), BATCH_UPDATE_CHUNK_SIZE):
+        chunk = updates[start:start + BATCH_UPDATE_CHUNK_SIZE]
         run_google_api_with_retry(
             "Updating existing records",
             lambda current_chunk=chunk: worksheet.batch_update(current_chunk)
         )
+
+
+def normalize_store_name(value):
+    """Normalize store name for lookup and logging."""
+    return str(value).strip()
+
+
+def append_cell_update(batch_updates, col, row, value):
+    """Append a single cell update payload for gspread batch_update."""
+    batch_updates.append({
+        "range": f"{col}{row}",
+        "values": [[value]],
+    })
+
+
+def get_record_field(record, field_name):
+    """Read field from either pandas Series or dict."""
+    return record.get(field_name, "")
+
+
+def log_name_preview(prefix, names):
+    """Log a compact preview for long name lists."""
+    if not names:
+        return
+
+    preview = names[:LOG_PREVIEW_LIMIT]
+    suffix = "" if len(names) <= LOG_PREVIEW_LIMIT else ", ..."
+    log(f"{prefix} ({len(names)}): [{', '.join(preview)}{suffix}]")
 
 
 def export_to_google_sheets(df):
@@ -191,6 +220,19 @@ def export_to_google_sheets(df):
         lambda: spreadsheet.get_worksheet(0)
     )
 
+    def write_dataframe(dataframe, row, include_header, action_name):
+        run_google_api_with_retry(
+            action_name,
+            lambda: set_with_dataframe(
+                worksheet,
+                dataframe,
+                row=row,
+                col=2,
+                include_index=False,
+                include_column_header=include_header,
+            )
+        )
+
     # Map each country to its (value column letter, url column letter) in the sheet
     # Columns: B=Brand name, C=Keyword, D=Store name, E=SG, F=MY, G=HK, H=ID,
     #          I=Store Redirection Status, J=Date Time Added, K=SG url, L=MY url, M=HK url, N=ID url
@@ -223,7 +265,7 @@ def export_to_google_sheets(df):
             # Build lookup by store name only: {Store name: {'sheet_row': row_number, 'row': row_data_dict}}
             existing_lookup = {}
             for i, (_, row) in enumerate(existing_df.iterrows()):
-                key = str(row['Store name']).rstrip()
+                key = normalize_store_name(row['Store name'])
                 sheet_row = i + 2  # +2: row 1 is header, data starts at row 2
                 if key and key not in existing_lookup:
                     existing_lookup[key] = {
@@ -234,9 +276,10 @@ def export_to_google_sheets(df):
             new_records = []
             batch_updates = []
             seen_store_names = set(existing_lookup.keys())
+            updated_existing_stores = set()
 
             for _, row in df.iterrows():
-                key = str(row['Store name']).rstrip()
+                key = normalize_store_name(get_record_field(row, 'Store name'))
                 if not key:
                     continue
 
@@ -256,26 +299,20 @@ def export_to_google_sheets(df):
                     # Fill fixed fields if they are missing in sheet.
                     for field in ['Brand name', 'Keyword', 'Store Redirection Status']:
                         existing_val = existing_row.get(field, "")
-                        new_val = row.get(field, "")
+                        new_val = get_record_field(row, field)
                         if is_missing(existing_val) and not is_missing(new_val):
                             col = fixed_col_map[field]
-                            batch_updates.append({
-                                'range': f'{col}{sheet_row}',
-                                'values': [[new_val]]
-                            })
+                            append_cell_update(batch_updates, col, sheet_row, new_val)
                             existing_row[field] = new_val
 
                     for country in countries:
-                        new_val = row.get(country, 0)
+                        new_val = get_record_field(row, country)
                         raw_existing_val = existing_row.get(country, "")
                         country_col, url_col = country_col_map[country]
 
                         # Normalize empty country marks in sheet to 0.
                         if is_missing(raw_existing_val):
-                            batch_updates.append({
-                                'range': f'{country_col}{sheet_row}',
-                                'values': [[0]]
-                            })
+                            append_cell_update(batch_updates, country_col, sheet_row, 0)
                             existing_val = 0
                             existing_row[country] = 0
                         else:
@@ -284,29 +321,19 @@ def export_to_google_sheets(df):
                             except (ValueError, TypeError):
                                 existing_val = 0
 
-                        new_url_val = row.get(f'{country} url', '')
+                        new_url_val = get_record_field(row, f'{country} url')
                         existing_url_val = existing_row.get(f'{country} url', '')
 
                         if new_val == 1 and existing_val == 0:
                             any_country_upgraded = True
-                            batch_updates.append({
-                                'range': f'{country_col}{sheet_row}',
-                                'values': [[1]]
-                            })
+                            append_cell_update(batch_updates, country_col, sheet_row, 1)
                             if not is_missing(new_url_val):
-                                batch_updates.append({
-                                    'range': f'{url_col}{sheet_row}',
-                                    'values': [[new_url_val]]
-                                })
+                                append_cell_update(batch_updates, url_col, sheet_row, new_url_val)
                                 existing_row[f'{country} url'] = new_url_val
                             existing_row[country] = 1
                         elif new_val == 1 and is_missing(existing_url_val) and not is_missing(new_url_val):
                             # Keep mark=1 and fill URL if it is missing.
-                            _, url_col = country_col_map[country]
-                            batch_updates.append({
-                                'range': f'{url_col}{sheet_row}',
-                                'values': [[new_url_val]]
-                            })
+                            append_cell_update(batch_updates, url_col, sheet_row, new_url_val)
                             existing_row[f'{country} url'] = new_url_val
 
                     # Date Time Added rules:
@@ -314,52 +341,50 @@ def export_to_google_sheets(df):
                     # 2) If missing, fill it as current time.
                     current_datetime = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
                     if any_country_upgraded or is_missing(existing_row.get('Date Time Added', '')):
-                        batch_updates.append({
-                            'range': f"{fixed_col_map['Date Time Added']}{sheet_row}",
-                            'values': [[current_datetime]]
-                        })
+                        append_cell_update(
+                            batch_updates,
+                            fixed_col_map['Date Time Added'],
+                            sheet_row,
+                            current_datetime,
+                        )
                         existing_row['Date Time Added'] = current_datetime
 
-            new_record_brand_names = [str(r.get('Brand name', '')) for r in new_records]
-            log(f"New record Brand name(s): {new_record_brand_names}")
+                    if any_country_upgraded:
+                        updated_existing_stores.add(key)
+
+            new_record_brand_names = [
+                normalize_store_name(get_record_field(r, 'Brand name'))
+                for r in new_records
+                if normalize_store_name(get_record_field(r, 'Brand name'))
+            ]
+            log_name_preview("New record Brand name(s)", new_record_brand_names)
             if batch_updates:
                 apply_batch_updates(worksheet, batch_updates)
                 log(f"Updated {len(batch_updates)} cell(s) in existing records")
+                if updated_existing_stores:
+                    log_name_preview("Updated existing store(s)", sorted(updated_existing_stores))
 
             if new_records:
                 new_df = pd.DataFrame(new_records)
+                new_store_names = sorted({
+                    normalize_store_name(get_record_field(r, 'Store name'))
+                    for r in new_records
+                    if normalize_store_name(get_record_field(r, 'Store name'))
+                })
 
                 # Append new data below existing data; column A is managed directly in Google Sheets
                 last_row = len(existing_df) + 2  # +2 because of header
-                run_google_api_with_retry(
-                    "Appending new records",
-                    lambda: set_with_dataframe(
-                        worksheet,
-                        new_df,
-                        row=last_row,
-                        col=2,
-                        include_index=False,
-                        include_column_header=False,
-                    )
-                )  # Start from column B
+                write_dataframe(new_df, last_row, False, "Appending new records")
 
                 log(f"Appended {len(new_df)} new records to Google Sheets")
+                if new_store_names:
+                    log_name_preview("Appended new store(s)", new_store_names)
             else:
                 log("No new records to add - all data already exists in sheet")
         else:
             # No existing data, add everything with headers
             # Then add the data starting from column B
-            run_google_api_with_retry(
-                "Writing initial sheet data",
-                lambda: set_with_dataframe(
-                    worksheet,
-                    df,
-                    row=1,
-                    col=2,
-                    include_index=False,
-                    include_column_header=True,
-                )
-            )
+            write_dataframe(df, 1, True, "Writing initial sheet data")
             log("Added data to empty Google Sheets")
             
     except Exception as e:

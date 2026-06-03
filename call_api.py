@@ -41,10 +41,21 @@ API_HEADERS = {
     "Content-Type": "application/json",
 }
 
+DOMAIN_MAP = {
+    "my": "zalora.com.my",
+    "sg": "zalora.sg",
+    "hk": "zalora.com.hk",
+    "id": "zalora.co.id",
+}
+
 final = {}
 final_lock = threading.Lock()
 final_data = {}
 final_data_lock = threading.Lock()
+
+
+def build_brand_key(brand, country):
+    return f"{brand} - {country}"
 
 
 def fetch_brand_id_from_page(url):
@@ -90,7 +101,7 @@ def fetch_stores_from_api(brand_id, domain, country):
             return
 
         with final_lock:
-            final[f"{brand} - {country}"] = stores
+            final[build_brand_key(brand, country)] = stores
 
     except Exception as e:
         log(f"[API] Error fetching stores for brand {brand_id} in {country}: {e}")        
@@ -149,79 +160,77 @@ def process_site(site):
 
 def get_domain(country):
     """Get domain name based on country code"""
-    domain_map = {
-        "my": "zalora.com.my",
-        "sg": "zalora.sg",
-        "hk": "zalora.com.hk",
-        "id": "zalora.co.id"
-    }
-    return domain_map.get(country.lower(), "")
+    return DOMAIN_MAP.get(country.lower(), "")
 
-def format_data(data):
-    """Format raw data into structured format for export"""
-    for brand, store_ids in data.items():
-        country = brand.split(" - ")[-1]
-        domain = get_domain(country)
 
-        store_id = store_ids[0]
+def build_keywords(brand_key):
+    """Build keyword variants from brand key in format '<brand> - <country>'."""
+    brand_name = brand_key.rsplit(" - ", 1)[0]
+    keyword1 = brand_name.lower()
+    if keyword1.endswith("."):
+        keyword1 = keyword1[:-1]
+    keyword2 = re.sub(r'[^a-zA-Z0-9 ]', '', brand_name)
+    return [keyword1, keyword2]
 
-        try:
-            seller_info_url = f"https://api.{domain}/v1/dynseller/{store_id}/datajet/section/home"
-            session = get_session()
-            seller_info_res = session.get(seller_info_url, headers=API_HEADERS, timeout=30)
-            seller_info_res.raise_for_status()
+def format_data(brand, store_ids):
+    """Format a single brand record into export shape and store in shared final_data."""
+    country = brand.rsplit(" - ", 1)[-1]
+    domain = get_domain(country)
+    if not domain or not store_ids:
+        return
+
+    store_id = store_ids[0]
+
+    try:
+        session = get_session()
+        seller_info_url = f"https://api.{domain}/v1/dynseller/{store_id}/datajet/section/home"
+        seller_info_res = session.get(seller_info_url, headers=API_HEADERS, timeout=30)
+        seller_info_res.raise_for_status()
+        time.sleep(0.4)
+        seller_info_url_result = seller_info_res.json()
+
+        subsections = seller_info_url_result.get("data", {}).get("Subsections", [])
+        final_store_name = None
+        final_store_slug = None
+        for subsection in subsections:
+            collection = subsection.get("Collection") or {}
+            product_list = collection.get("ProductList") or {}
+            products = product_list.get("Products") or []
+            if not products:
+                continue
+            fulfillment = products[0].get("FulfillmentInformation") or {}
+            final_store_name = fulfillment.get("SellerName") or final_store_name
+            final_store_slug = fulfillment.get("SellerUrlKey") or final_store_slug
+            if final_store_name and final_store_slug:
+                break
+
+        # Fallback to seller API only when missing name or slug from seller info endpoint
+        if final_store_name is None or final_store_slug is None:
+            seller_name_url = f"https://api.{domain}/v1/seller/{store_id}"
+            seller_name_res = session.get(seller_name_url, headers=API_HEADERS, timeout=30)
+            seller_name_res.raise_for_status()
             time.sleep(0.4)
-            seller_info_url_result = seller_info_res.json()
+            seller_name_result = seller_name_res.json()
 
-            subsections = seller_info_url_result.get("data", {}).get("Subsections", [])
-            final_store_name = None
-            final_store_slug = None
-            for subsection in subsections:
-                collection = subsection.get("Collection") or {}
-                product_list = collection.get("ProductList") or {}
-                products = product_list.get("Products") or []
-                if not products:
-                    continue
-                fulfillment = products[0].get("FulfillmentInformation") or {}
-                final_store_name = fulfillment.get("SellerName") or final_store_name
-                final_store_slug = fulfillment.get("SellerUrlKey") or final_store_slug
-                if final_store_name and final_store_slug:
-                    break
+            fallback_name = seller_name_result.get("data", {}).get("SellerName")
+            if final_store_name is None:
+                final_store_name = fallback_name
+            if final_store_slug is None and fallback_name:
+                final_store_slug = slugify(fallback_name.lower())
 
-            # Fallback to seller API only when missing name or slug from seller info endpoint
-            if final_store_name is None or final_store_slug is None:
-                seller_name_url = f"https://api.{domain}/v1/seller/{store_id}"
-                seller_name_res = session.get(seller_name_url, headers=API_HEADERS, timeout=30)
-                seller_name_res.raise_for_status()
-                time.sleep(0.4)
-                seller_name_result = seller_name_res.json()
+        if not final_store_name or not final_store_slug:
+            raise ValueError(f"Missing seller name/slug for store_id={store_id}")
 
-                fallback_name = seller_name_result.get("data", {}).get("SellerName")
-                if final_store_name is None:
-                    final_store_name = fallback_name
-                if final_store_slug is None and fallback_name:
-                    final_store_slug = slugify(fallback_name.lower())
+        final_store_url = f"https://www.{domain}/store/{final_store_slug}"
 
-            if not final_store_name or not final_store_slug:
-                raise ValueError(f"Missing seller name/slug for store_id={store_id}")
-            final_store_url = f"https://www.{domain}/store/{final_store_slug}"
-                            
-
-            keyword1 = brand.split(" - ")[0].lower()
-            keyword1 = keyword1[:-1] if keyword1.endswith('.') else keyword1
-            keyword2 = re.sub(r'[^a-zA-Z0-9 ]', '', brand.split(" - ")[0])
-
-            with final_data_lock:
-                final_data[brand] = {
-                    "store_name": final_store_name,
-                    "keyword": [keyword1, keyword2],
-                    "url": final_store_url
-                }
-
-            return final_data
-        except Exception as e:
-            log(f"[API] Error fetching store details for {brand}: {e}")
-            return
+        with final_data_lock:
+            final_data[brand] = {
+                "store_name": final_store_name,
+                "keyword": build_keywords(brand),
+                "url": final_store_url,
+            }
+    except Exception as e:
+        log(f"[API] Error fetching store details for {brand}: {e}")
         
 def finalize_data(data):
     """Finalize data by removing duplicates and formatting for export"""
@@ -230,7 +239,7 @@ def finalize_data(data):
 
     log("[API] Starting to format data for export...")
     with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = [executor.submit(format_data, {brand: store_id}) for brand, store_id in unique_stores.items()]
+        futures = [executor.submit(format_data, brand, store_ids) for brand, store_ids in unique_stores.items()]
         for future in as_completed(futures):
             future.result()
 
@@ -239,6 +248,11 @@ def finalize_data(data):
 
 
 def api_execute(sites):
+    with final_lock:
+        final.clear()
+    with final_data_lock:
+        final_data.clear()
+
     # Process all 4 sites in parallel
     log("Starting API data extraction...")
     with ThreadPoolExecutor(max_workers=4) as executor:
