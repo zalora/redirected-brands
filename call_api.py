@@ -173,25 +173,20 @@ def format_data(data):
             time.sleep(0.4)
             seller_info_url_result = seller_info_res.json()
 
-            final_store_name = next(
-                (
-                    s["Collection"]["ProductList"]["Products"][0]["FulfillmentInformation"]["SellerName"]
-                    for s in seller_info_url_result["data"]["Subsections"]
-                    if s["Collection"]
-                ),
-                None
-
-            )
-
-            final_store_slug = next(
-                (
-                    s["Collection"]["ProductList"]["Products"][0]["FulfillmentInformation"]["SellerUrlKey"]
-                    for s in seller_info_url_result["data"]["Subsections"]
-                    if s["Collection"]
-                ),
-                None
-
-            )
+            subsections = seller_info_url_result.get("data", {}).get("Subsections", [])
+            final_store_name = None
+            final_store_slug = None
+            for subsection in subsections:
+                collection = subsection.get("Collection") or {}
+                product_list = collection.get("ProductList") or {}
+                products = product_list.get("Products") or []
+                if not products:
+                    continue
+                fulfillment = products[0].get("FulfillmentInformation") or {}
+                final_store_name = fulfillment.get("SellerName") or final_store_name
+                final_store_slug = fulfillment.get("SellerUrlKey") or final_store_slug
+                if final_store_name and final_store_slug:
+                    break
 
             # Fallback to seller API only when missing name or slug from seller info endpoint
             if final_store_name is None or final_store_slug is None:
