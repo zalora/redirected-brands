@@ -19,6 +19,8 @@ def main():
     # Merge results, giving priority to crawler data in case of overlaps
     # result = {**crawled_data, **fetched_data}
 
+    # Using the API is the preferred approach for now, as it offers more complete data coverage
+    # Crawler cannot reliably identify the associated brand or store
     exporter_run(fetched_data)
     log("Data extraction and export completed successfully.")
     

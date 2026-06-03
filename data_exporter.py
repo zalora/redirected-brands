@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import time
 import pandas as pd
 from datetime import datetime
 from dotenv import load_dotenv
@@ -12,6 +13,9 @@ from gspread_dataframe import set_with_dataframe
 load_dotenv()
 
 countries = ["SG", "MY", "HK", "ID"]
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+MAX_GOOGLE_API_RETRIES = 5
+BASE_RETRY_DELAY_SECONDS = 2
 
 
 def get_brand_name(name):
@@ -97,6 +101,55 @@ def create_dataframe(result):
     return df
 
 
+def get_api_error_status_code(error):
+    """Extract HTTP status code from gspread APIError when available."""
+    response = getattr(error, "response", None)
+    status_code = getattr(response, "status_code", None)
+    if status_code is not None:
+        return status_code
+
+    message = str(error)
+    for code in RETRYABLE_STATUS_CODES:
+        if f"[{code}]" in message:
+            return code
+    return None
+
+
+def is_retryable_api_error(error):
+    """Return True if the error is transient and should be retried."""
+    status_code = get_api_error_status_code(error)
+    return status_code in RETRYABLE_STATUS_CODES
+
+
+def run_google_api_with_retry(action_name, action):
+    """Retry transient Google Sheets API errors with exponential backoff."""
+    for attempt in range(1, MAX_GOOGLE_API_RETRIES + 1):
+        try:
+            return action()
+        except Exception as error:
+            if not is_retryable_api_error(error) or attempt == MAX_GOOGLE_API_RETRIES:
+                raise
+
+            delay = BASE_RETRY_DELAY_SECONDS * (2 ** (attempt - 1))
+            status_code = get_api_error_status_code(error)
+            log(
+                f"{action_name} failed with HTTP {status_code} "
+                f"(attempt {attempt}/{MAX_GOOGLE_API_RETRIES}). Retrying in {delay}s..."
+            )
+            time.sleep(delay)
+
+
+def apply_batch_updates(worksheet, updates):
+    """Apply updates in chunks to reduce API pressure and payload size."""
+    chunk_size = 200
+    for start in range(0, len(updates), chunk_size):
+        chunk = updates[start:start + chunk_size]
+        run_google_api_with_retry(
+            "Updating existing records",
+            lambda current_chunk=chunk: worksheet.batch_update(current_chunk)
+        )
+
+
 def export_to_google_sheets(df):
     """Export dataframe to Google Sheets - append new data if not already exists.
 
@@ -129,8 +182,14 @@ def export_to_google_sheets(df):
         creds = Credentials.from_service_account_file(service_account_value, scopes=scope)
     client = gspread.authorize(creds)
 
-    spreadsheet = client.open_by_url(sheet_url)
-    worksheet = spreadsheet.get_worksheet(0)
+    spreadsheet = run_google_api_with_retry(
+        "Opening spreadsheet",
+        lambda: client.open_by_url(sheet_url)
+    )
+    worksheet = run_google_api_with_retry(
+        "Opening worksheet",
+        lambda: spreadsheet.get_worksheet(0)
+    )
 
     # Map each country to its (value column letter, url column letter) in the sheet
     # Columns: B=Brand name, C=Keyword, D=Store name, E=SG, F=MY, G=HK, H=ID,
@@ -153,7 +212,10 @@ def export_to_google_sheets(df):
 
     # Get existing data from sheet
     try:
-        existing_data = worksheet.get_all_records()
+        existing_data = run_google_api_with_retry(
+            "Reading existing sheet records",
+            lambda: worksheet.get_all_records()
+        )
         if existing_data:
             existing_df = pd.DataFrame(existing_data)
             log(f"Found {len(existing_df)} existing records in sheet")
@@ -261,7 +323,7 @@ def export_to_google_sheets(df):
             new_record_brand_names = [str(r.get('Brand name', '')) for r in new_records]
             log(f"New record Brand name(s): {new_record_brand_names}")
             if batch_updates:
-                worksheet.batch_update(batch_updates)
+                apply_batch_updates(worksheet, batch_updates)
                 log(f"Updated {len(batch_updates)} cell(s) in existing records")
 
             if new_records:
@@ -269,7 +331,17 @@ def export_to_google_sheets(df):
 
                 # Append new data below existing data; column A is managed directly in Google Sheets
                 last_row = len(existing_df) + 2  # +2 because of header
-                set_with_dataframe(worksheet, new_df, row=last_row, col=2, include_index=False, include_column_header=False)  # Start from column B
+                run_google_api_with_retry(
+                    "Appending new records",
+                    lambda: set_with_dataframe(
+                        worksheet,
+                        new_df,
+                        row=last_row,
+                        col=2,
+                        include_index=False,
+                        include_column_header=False,
+                    )
+                )  # Start from column B
 
                 log(f"Appended {len(new_df)} new records to Google Sheets")
             else:
@@ -277,15 +349,22 @@ def export_to_google_sheets(df):
         else:
             # No existing data, add everything with headers
             # Then add the data starting from column B
-            set_with_dataframe(worksheet, df, row=1, col=2, include_index=False, include_column_header=True)
+            run_google_api_with_retry(
+                "Writing initial sheet data",
+                lambda: set_with_dataframe(
+                    worksheet,
+                    df,
+                    row=1,
+                    col=2,
+                    include_index=False,
+                    include_column_header=True,
+                )
+            )
             log("Added data to empty Google Sheets")
             
     except Exception as e:
-        log(f"Error reading existing data, adding all data with headers: {e}")
-        # If error reading existing data, overwrite with new data
-        # Then add the data starting from column B
-        set_with_dataframe(worksheet, df, row=1, col=2, include_index=False, include_column_header=True)
-        log("Added data to Google Sheets")
+        log(f"Google Sheets export failed: {e}")
+        raise
 
 
 def exporter_run(data):

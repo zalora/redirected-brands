@@ -213,6 +213,7 @@ def format_data(data):
                             
 
             keyword1 = brand.split(" - ")[0].lower()
+            keyword1 = keyword1[:-1] if keyword1.endswith('.') else keyword1
             keyword2 = re.sub(r'[^a-zA-Z0-9 ]', '', brand.split(" - ")[0])
 
             with final_data_lock:
