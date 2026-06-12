@@ -46,6 +46,7 @@ DOMAIN_MAP = {
     "sg": "zalora.sg",
     "hk": "zalora.com.hk",
     "id": "zalora.co.id",
+    "ph": "zalora.com.ph",
 }
 
 final = {}

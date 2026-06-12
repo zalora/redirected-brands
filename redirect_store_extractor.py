@@ -7,7 +7,8 @@ sites = [
     "https://www.zalora.com.my/brands",
     "https://www.zalora.sg/brands",
     "https://www.zalora.com.hk/brands",
-    "https://www.zalora.co.id/brands"
+    "https://www.zalora.co.id/brands",
+    "https://www.zalora.com.ph/brands"
 ]
 
 
