@@ -12,7 +12,7 @@ from gspread_dataframe import set_with_dataframe
 
 load_dotenv()
 
-countries = ["SG", "MY", "HK", "ID"]
+countries = ["SG", "MY", "HK", "ID", "PH"]
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 MAX_GOOGLE_API_RETRIES = 5
 BASE_RETRY_DELAY_SECONDS = 2
@@ -97,7 +97,7 @@ def create_dataframe(result):
 
     # set the column order; column A (No) is managed directly in Google Sheets
     df = df[
-        ["Brand name", "Keyword", "Store name", "SG", "MY", "HK", "ID", "Store Redirection Status", "Date Time Added", "SG url", "MY url", "HK url", "ID url"]
+        ["Brand name", "Keyword", "Store name", "SG", "MY", "HK", "ID", "PH", "Store Redirection Status", "Date Time Added", "SG url", "MY url", "HK url", "ID url", "PH url"]
     ]
     
     return df
@@ -234,19 +234,20 @@ def export_to_google_sheets(df):
         )
 
     # Map each country to its (value column letter, url column letter) in the sheet
-    # Columns: B=Brand name, C=Keyword, D=Store name, E=SG, F=MY, G=HK, H=ID,
-    #          I=Store Redirection Status, J=Date Time Added, K=SG url, L=MY url, M=HK url, N=ID url
+    # Columns: B=Brand name, C=Keyword, D=Store name, E=SG, F=MY, G=HK, H=ID, I=PH,
+    #          J=Store Redirection Status, K=Date Time Added, L=SG url, M=MY url, N=HK url, O=ID url, P=PH url
     country_col_map = {
-        'SG': ('E', 'K'),
-        'MY': ('F', 'L'),
-        'HK': ('G', 'M'),
-        'ID': ('H', 'N'),
+        'SG': ('E', 'L'),
+        'MY': ('F', 'M'),
+        'HK': ('G', 'N'),
+        'ID': ('H', 'O'),
+        'PH': ('I', 'P'),
     }
     fixed_col_map = {
         'Brand name': 'B',
         'Keyword': 'C',
-        'Store Redirection Status': 'I',
-        'Date Time Added': 'J',
+        'Store Redirection Status': 'J',
+        'Date Time Added': 'K',
     }
 
     def is_missing(value):
